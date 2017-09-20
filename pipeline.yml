@@ -5,17 +5,17 @@ resources:
   type: git
   source:
     uri: ((github-uri))
-    branch: ((github-branch))
+    branch: master
     git_user: ((github-username))
     private_key: ((github-ssh-key-private))
 
-- name: github-repo-scaladoc
-  type: git
-  source:
-    uri: ((github-uri))
-    branch: ((github-scaladoc-branch))
-    git_user: ((github-username))
-    private_key: ((github-ssh-key-private))
+#- name: github-repo-scaladoc
+#  type: git
+  #source:
+  #  uri: ((github-uri))
+  #  branch: ((github-scaladoc-branch))
+  #  git_user: ((github-username))
+  #  private_key: ((github-ssh-key-private))
 
 
 jobs:
@@ -30,7 +30,7 @@ jobs:
       image_resource:
         type: docker-image
         source:
-          repository: ((docker-scala-sbt-repo))
+          repository: hseeberger/scala-sbt
           tag: "latest"
       inputs:
       - name: github-repo-master
