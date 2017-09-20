@@ -1,0 +1,49 @@
+resources:
+#need to add git repo as well for docs
+
+- name: github-repo-master
+  type: git
+  source:
+    uri: ((github-uri))
+    branch: ((github-branch))
+    git_user: ((github-username))
+    private_key: ((github-ssh-key-private))
+
+- name: github-repo-scaladoc
+  type: git
+  source:
+    uri: ((github-uri))
+    branch: ((github-scaladoc-branch))
+    git_user: ((github-username))
+    private_key: ((github-ssh-key-private))
+
+
+jobs:
+
+- name: build
+  plan:
+  - get: github-repo-master
+    trigger: true
+  - task: compile-and-test
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: ((docker-scala-sbt-repo))
+          tag: "latest"
+      inputs:
+      - name: github-repo-master
+      run:
+        path: bash
+        args:
+        - -exc
+        - |
+          sbt clean compile test
+
+
+#- name: deploy
+
+#- name: deploy-snapshot
+
+#- name: scaladoc

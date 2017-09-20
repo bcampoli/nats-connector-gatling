@@ -1,0 +1,4 @@
+github-uri: https://github.com/bcampoli/nats-connector-gatling
+github-branch: master
+github-scaladoc-branch: gh-pages
+docker-scala-sbt-repo: hseeberger/scala-sbt
