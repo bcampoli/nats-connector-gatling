@@ -1,30 +1,35 @@
-resources:
-#need to add git repo as well for docs
+resource_types:
+- name: slack-notification
+  type: docker-image
+  source:
+    repository: cfcommunity/slack-notification-resource
+    tag: latest
 
+resources:
 - name: github-repo-master
   type: git
   source:
-    uri: ((github-uri))
+    uri: https://((github-username)):((github-password))@github.com/((github-repo-location))/((github-repo-name)).git
     branch: master
-    git_user: ((github-username))
-    private_key: ((github-ssh-key-private))
 
-#- name: github-repo-scaladoc
-#  type: git
-  #source:
-  #  uri: ((github-uri))
-  #  branch: gh-pages
-  #  git_user: ((github-username))
-  #  private_key: ((github-ssh-key-private))
+- name: gh-pages
+  type: git
+  source:
+    uri: https://((github-username)):((github-password))@github.com/((github-repo-location))/((github-repo-name)).git
+    branch: gh-pages
 
+- name: slack-alert
+  type: slack-notification
+  source:
+    url: ((slack-webhook))
 
 jobs:
 
-- name: build
+- name: run-tests
   plan:
   - get: github-repo-master
     trigger: true
-  - task: compile-and-test
+  - task: run-test
     config:
       platform: linux
       image_resource:
@@ -35,15 +40,27 @@ jobs:
       inputs:
       - name: github-repo-master
       run:
-        path: bash
-        args:
-        - -exc
-        - |
-          sbt clean compile test
+        path: github-repo-master/scripts/run-tests.sh
+    on_failure:
+      put: slack-alert
+      params:
+        channel: '#deetazilla'
+        text: ((project-name)) Build Tests Failed!
+        username: concourse
+        icon_url: http://cl.ly/image/3e1h0H3H2s0P/concourse-logo.png
+    on_success:
+      put: slack-alert
+      params:
+        channel: '#deetazilla'
+        text:  ((project-name)) Build Tests Passed Succesfully!
+        username: concourse
+        icon_url: http://cl.ly/image/3e1h0H3H2s0P/concourse-logo.png
 
-- name: deploy
+
+- name: check-is-snapshot
   plan:
   - get: github-repo-master
+    passed: [run-tests]
     trigger: true
   - task: check-non-snapshot
     config:
@@ -56,52 +73,149 @@ jobs:
       inputs:
       - name: github-repo-master
       run:
-        path: bash
-        args:
-        - -exc
-        - |
-          export PROJECT_VERSION=$(sbt 'inspect version' | grep Setting | awk '{print $NF}' | perl -pe 's/\e([^\[\]]|\[.*?[a-zA-Z]|\].*?\a)//g')
-          if [[ ${PROJECT_VERSION} == *"SNAPSHOT"* ]];then exit 1; fi
-          exit 0
-      on-success:
-        - task: sonatype-deploy
-          params:
-            SONATYPE_PGP_SECRING_64: ((sonatype-pgp-secring-64))
-            SONATYPE_PGP_PUBRING_64: ((sonatype-pgp-pubring-64))
-          config:
-            platform: linux
-            image_resource:
-              type: docker-image
-              source:
-                repository: hseeberger/scala-sbt
-                tag: "latest"
-            inputs:
-            - name: github-repo-master
-            run:
-              path: bash
-              args:
-              - -exc
-              - |
-                echo "${SONATYPE_PGP_SECRING_64}" | base64 -d > /pipeline/source/secring.asc
-                echo "${SONATYPE_PGP_PUBRING_64}" | base64 -d > /pipeline/source/pubring.asc
-                sbt clean compile publishSigned sonatypeRelease
-      on-failure:
-        - task: deploy-snapshot
-          config:
-            platform: linux
-            image_resource:
-              type: docker-image
-              source:
-                repository: hseeberger/scala-sbt
-                tag: "latest"
-            inputs:
-            - name: github-repo-master
-            run:
-              path: bash
-              args:
-              - -exc
-              - |
-                sbt clean compile publish
+        path: github-repo-master/scripts/check-is-snapshot.sh
+    on_success:
+      put: slack-alert
+      params:
+        channel: '#deetazilla'
+        text: ((project-name)) Repo was detected to be a snapshot, Attempting to deploy snapshot...
+        username: concourse
+        icon_url: http://cl.ly/image/3e1h0H3H2s0P/concourse-logo.png
+
+- name: check-is-release
+  plan:
+  - get: github-repo-master
+    passed: [run-tests]
+    trigger: true
+  - task: check-non-snapshot
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: hseeberger/scala-sbt
+          tag: "latest"
+      inputs:
+      - name: github-repo-master
+      run:
+        path: github-repo-master/scripts/check-is-release.sh
+    on_success:
+      put: slack-alert
+      params:
+        channel: '#deetazilla'
+        text: ((project-name)) Repo was detected to be a release, Attempting to deploy...
+        username: concourse
+        icon_url: http://cl.ly/image/3e1h0H3H2s0P/concourse-logo.png
+
+- name: deploy-snapshot
+  plan:
+  - get: github-repo-master
+    passed: [check-is-snapshot]
+    trigger: true
+  - task: snap-deploy
+    params:
+      SONATYPE_USERNAME: ((sonatype-username))
+      SONATYPE_PASSWORD: ((sonatype-password))
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: hseeberger/scala-sbt
+          tag: "latest"
+      inputs:
+      - name: github-repo-master
+      run:
+        path: github-repo-master/scripts/deploy-snapshot.sh
+    on_failure:
+      put: slack-alert
+      params:
+        channel: '#deetazilla'
+        text: ((project-name)) Snapshot Failed to Deploy!
+        username: concourse
+        icon_url: http://cl.ly/image/3e1h0H3H2s0P/concourse-logo.png
+    on_success:
+      put: slack-alert
+      params:
+        channel: '#deetazilla'
+        text: ((project-name)) Snapshot was Succesfully Deployed!
+        username: concourse
+        icon_url: http://cl.ly/image/3e1h0H3H2s0P/concourse-logo.png
 
 
-#- name: scaladoc
+- name: sonatype-deploy
+  plan:
+  - get: github-repo-master
+    passed: [check-is-release]
+    trigger: true
+  - task: release-deploy
+    params:
+      SONATYPE_PGP_SECRING_64: ((sonatype-pgp-secring-64))
+      SONATYPE_PGP_PUBRING_64: ((sonatype-pgp-pubring-64))
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: hseeberger/scala-sbt
+          tag: "latest"
+      inputs:
+      - name: github-repo-master
+      run:
+        path: github-repo-master/scripts/deploy-release.sh
+    on_failure:
+      put: slack-alert
+      params:
+        channel: '#deetazilla'
+        text: ((project-name)) failed to deploy release to Nexus!
+        username: concourse
+        icon_url: http://cl.ly/image/3e1h0H3H2s0P/concourse-logo.png
+    on_success:
+      put: slack-alert
+      params:
+        channel: '#deetazilla'
+        text: ((project-name)) Release deployed to Nexus!
+        username: concourse
+        icon_url: http://cl.ly/image/3e1h0H3H2s0P/concourse-logo.png
+
+
+- name: scaladoc
+  plan:
+  - get: github-repo-master
+    passed: [sonatype-deploy]
+    trigger: true
+  - get: gh-pages
+  - task: update-docs
+    params:
+      GITHUB_EMAIL: ((github-email))
+      GITHUB_USERNAME: ((github-username))
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: hseeberger/scala-sbt
+          tag: "latest"
+      inputs:
+      - name: github-repo-master
+      - name: gh-pages
+      outputs:
+      - name: github-docs-updated
+      run:
+        path: github-repo-master/scripts/update-scaladocs.sh
+  - put: gh-pages
+    params: {repository: github-docs-updated}
+    on_failure:
+      put: slack-alert
+      params:
+        channel: '#deetazilla'
+        text: ((project-name)) Docs Failed to Update!
+        username: concourse
+        icon_url: http://cl.ly/image/3e1h0H3H2s0P/concourse-logo.png
+    on_success:
+      put: slack-alert
+      params:
+        channel: '#deetazilla'
+        text: ((project-name)) Docs Succesfully Updated!
+        username: concourse
+        icon_url: http://cl.ly/image/3e1h0H3H2s0P/concourse-logo.png
